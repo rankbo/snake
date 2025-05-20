@@ -1,0 +1,346 @@
+define GRID_HEIGHT 20  // 超过15则死亡
+
+int clearScore[5] = {0, 100, 300, 500, 800};
+
+// 方块形状数据,定义为4*4最大网格
+const char* PIECE_SHAPES[7][4] = {
+    // I型方块
+    {"####", "    ", "    ", "    "},
+    // T型方块
+    {" #  ", "### ", "    ", "    "},
+    // O型方块
+    {"##  ", "##  ", "    ", "    "},
+    // J型方块
+    {"#   ", "### ", "    ", "    "},
+    // L型方块
+    {"  # ", "### ", "    ", "    "},
+    // S型方块
+    {" ## ", "##  ", "    ", "    "},
+    // Z型方块
+    {"##  ", " ## ", "    ", "    "}};
+
+// 方块对象结构
+typedef struct {
+    int mRotation;      // 方块旋转状态
+    int mX, mY;         // 方块在游戏区域中的位置
+    char mShape[4][4];  // 方块形状数据
+} MyPiece;
+
+// 游戏控制器结构
+typedef struct {
+    int mScore;        // 玩家分数
+    MyPiece* mPiece;   // 当前活动方块
+    int mNextIndex;    // 下一个方块类型
+    char* mGameGrids;  // 游戏区域二维数组
+} GameStatus;
+
+// 创建控制器
+GameStatus* initGameStatus() {
+    GameStatus* status = (GameStatus*)malloc(sizeof(GameStatus));
+    if (!status)
+        return NULL;
+
+    status->mScore = 0;
+    // 分配游戏区域内存
+    status->mGameGrids = (char*)malloc(GRID_HEIGHT * GRID_WIDTH * sizeof(char*));
+    if (!status->mGameGrids) {
+        free(status);
+        return NULL;
+    }
+
+    // 初始化空白区域
+    memset(status->mGameGrids, ' ', GRID_HEIGHT * GRID_WIDTH);
+    status->mPiece = (MyPiece*)malloc(sizeof(MyPiece));
+    if (!status->mPiece)
+        return;
+
+    return status;
+}
+
+// 释放控制器
+void freeControl(GameStatus* status) {}
+
+// 碰撞检测
+// 参数: 指针, X偏移量, Y偏移量, 形状
+// 返回: 1表示碰撞，0表示无碰撞
+int isCollision(GameStatus* status, int offsetX, int offsetY, char (*shape)[4]) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (shape[i][j] != ' ') {
+                int newX = j + offsetX;
+                int newY = i + offsetY;
+
+                if (newX < 0 || newX >= GRID_WIDTH || newY >= GRID_HEIGHT ||
+                    (newY >= 0 && status->mGameGrids[newY * GRID_WIDTH + newX] != ' ')) {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+// 固定方块到指定区域
+// 参数: 控制指针
+void finishMoved(GameStatus* status) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (status->mPiece->mShape[i][j] != ' ') {
+                int x = status->mPiece->mX + j;
+                int y = status->mPiece->mY + i;
+                if (y >= 0) {
+                    status->mGameGrids[y * GRID_WIDTH + x] = '#';
+                }
+            }
+        }
+    }
+}
+
+// 消除完整行
+void removeLines(GameStatus* status) {
+    if (!status)
+        return;
+
+    int linesCleared = 0;
+
+    for (int i = GRID_HEIGHT - 1; i >= 0; i--) {
+        int isLineFull = 1;
+
+        for (int j = 0; j < GRID_WIDTH; j++) {
+            if (status->mGameGrids[i * 4 + j] == ' ') {
+                isLineFull = 0;
+                break;
+            }
+        }
+
+        if (isLineFull) {
+            // 消除当前行
+            for (int k = i; k > 0; k--) {
+                memcpy(status->mGameGrids[k * GRID_WIDTH], status->mGameGrids[(k - 1) * GRID_WIDTH], GRID_WIDTH);
+            }
+
+            // 清空第一行
+            memset(status->mGameGrids[0], ' ', GRID_WIDTH);
+            linesCleared++;
+            i++;  // 重新检查当前位置
+        }
+    }
+
+    status->mScore += clearScore[linesCleared];
+}
+
+// 自定义评估函数
+int EvaluationScore(GameStatus* status, int targetX, int dropDist, char (*shape)[4]) {
+    // 创建临时游戏区域
+    char tempGrid[GRID_HEIGHT * GRID_WIDTH];
+    memcpy(tempGrid, status->mGameGrids, GRID_HEIGHT * GRID_WIDTH);
+
+    // 模拟放置方块
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            if (shape[i][j] != ' ') {
+                int newX = targetX + j;
+                int newY = dropDist + i;
+                if (newY >= 0 && newY < GRID_HEIGHT && newX >= 0 && newX < GRID_WIDTH) {
+                    tempGrid[newY * GRID_WIDTH + newX] = '#';
+                }
+            }
+        }
+    }
+
+    // 计算消除的行数
+    int linesRemoved = 0;
+    for (int i = GRID_HEIGHT - 1; i >= 0; i--) {
+        int isLineFull = 1;
+        for (int j = 0; j < GRID_WIDTH; j++) {
+            if (tempGrid[i * GRID_WIDTH + j] == ' ') {
+                isLineFull = 0;
+                break;
+            }
+        }
+
+        if (isLineFull) {
+            linesRemoved++;
+        }
+    }
+
+    // 计算列过渡
+    int colChanges = 0;
+    for (int j = 0; j < GRID_WIDTH; j++) {
+        int prevCell = 0;
+        for (int i = 0; i <= GRID_HEIGHT; i++) {
+            int currentCell = (i < GRID_HEIGHT) ? (tempGrid[i * GRID_WIDTH + j] != ' ') : 0;
+            if (currentCell != prevCell) {
+                colChanges++;
+            }
+            prevCell = currentCell;
+        }
+    }
+
+    // 计算高度
+    int stackHeight = 0;
+    for (int i = 0; i < GRID_HEIGHT; i++) {
+        for (int j = 0; j < GRID_WIDTH; j++) {
+            if (tempGrid[i * GRID_WIDTH + j] != ' ') {
+                stackHeight = (GRID_HEIGHT - i > stackHeight) ? GRID_HEIGHT - i : stackHeight;
+                break;
+            }
+        }
+    }
+
+    // 计算空洞数量
+    int holeCount = 0;
+    for (int j = 0; j < GRID_WIDTH; j++) {
+        int blockFound = 0;
+        for (int i = 0; i < GRID_HEIGHT; i++) {
+            if (tempGrid[i * GRID_WIDTH + j] != ' ') {
+                blockFound = 1;
+            } else if (blockFound) {
+                holeCount++;
+            }
+        }
+    }
+
+    // 计算行过渡
+    int rowChanges = 0;
+    for (int i = 0; i < GRID_HEIGHT; i++) {
+        int prevCell = 0;
+        for (int j = 0; j <= GRID_WIDTH; j++) {
+            int currentCell = (j < GRID_WIDTH) ? (tempGrid[i * GRID_WIDTH + j] != ' ') : 0;
+            if (currentCell != prevCell) {
+                rowChanges++;
+            }
+            prevCell = currentCell;
+        }
+    }
+
+    // 计算综合评分
+    return linesRemoved * 100 - holeCount * 20 - stackHeight * 2 - rowChanges * 5 - colChanges * 5;
+}
+
+void autoControl(GameStatus* status) {
+    // 寻找最佳位置
+    int bestScore = INT_MIN;
+
+    char rotatedShape[4][4];
+    char newShape[4][4];
+    memcpy(rotatedShape, status->mPiece->mShape, sizeof(rotatedShape));
+    // 尝试所有可能的旋转
+    for (int rotations = 0; rotations < 4; rotations++) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                newShape[j][3 - i] = rotatedShape[i][j];
+            }
+        }
+        memcpy(rotatedShape, newShape, sizeof(newShape));
+
+        // 尝试所有可能的水平位置
+        for (int x = -3; x < GRID_WIDTH; x++) {
+            // 检查位置是否可行
+            if (!isCollision(status, x, 0, rotatedShape)) {
+                // 计算下落距离
+                int dropDist = 0;
+                while (!isCollision(status, x, dropDist + 1, rotatedShape)) {
+                    dropDist++;
+                }
+
+                // 评估位置分数
+                int score = EvaluationScore(status, x, dropDist, rotatedShape);
+                if (score > bestScore) {
+                    bestScore = score;
+                    status->mPiece->mX = x;
+                    status->mPiece->mY = dropDist;
+                    status->mPiece->mRotation = rotations;
+                }
+            }
+        }
+    }
+
+    // 执行旋转
+    for (int i = 0; i < status->mPiece->mRotation; i++) {
+        char rotated[4][4] = {0};
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                rotated[j][3 - i] = status->mPiece->mShape[i][j];
+            }
+        }
+        memcpy(status->mPiece->mShape, rotated, sizeof(rotated));
+    }
+
+    finishMoved(status);
+    // 检查并消除完整行
+    removeLines(status);
+}
+
+// 清屏函数
+void clearConsole() {
+    system("cls");
+}
+
+int getPiece(char c) {
+    static char bolckType[8] = {'I', 'T', 'O', 'J', 'L', 'S', 'Z', 'X'};
+    for (size_t i = 0; i < sizeof(bolckType); i++) {
+        if (bolckType[i] == c) {
+            return i;
+        }
+    }
+    exit(0);
+}
+
+// 输入处理
+void getInput(GameStatus* status) {
+    int curIndex = 0;
+    char line[100];
+    fgets(line, 100, stdin);
+    int len = strlen(line);
+    if (len < 2 || len > 4) {
+        exit(0);
+    }
+    if (len == 2) {
+        curIndex = status->mNextIndex;
+        status->mNextIndex = getPiece(line[0]);
+    } else {
+        curIndex = getPiece(line[0]);
+        status->mNextIndex = getPiece(line[1]);
+    }
+    // 复制方块形状
+    for (int i = 0; i < 4; i++) {
+        strncpy(status->mPiece->mShape[i], PIECE_SHAPES[curIndex][i], 4);
+    }
+}
+
+// 输出结果
+void showResult(GameStatus* status) {
+    printf("%d %d\n", status->mPiece->mRotation, status->mPiece->mX);
+    printf("%d\n", status->mScore);
+    fflush(stdout);
+}
+
+// 主函数
+int main() {
+    GameStatus* status = initGameStatus();
+
+    for (;;) {
+        getInput(status);
+        // 自动控制
+        autoControl(status);
+        showResult(status);
+        if (status->mNextIndex == 7) {
+            break;
+        }
+    }
+
+    if (status) {
+        if (status->mGameGrids) {
+            free(status->mGameGrids);
+        }
+
+        if (status->mPiece) {
+            free(status->mPiece);
+        }
+        free(status);
+    }
+
+    return 0;
+}
